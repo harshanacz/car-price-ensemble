@@ -102,6 +102,29 @@ with tabs[0]:
                 "and was **dropped**. `Date` (all ads from Dec 2024 to Feb 2025) was also dropped.")
         st.markdown("**Features used:** " + ", ".join(f"`{f}`" for f in meta["features"]))
 
+    st.markdown("#### Relationships with price")
+    l, r = st.columns(2)
+    with l:
+        fig = px.scatter(data, x="Engine (cc)", y="Price", color="Fuel Type", opacity=0.5, log_y=True,
+                         color_discrete_map={"Petrol": "#4361ee", "Diesel": "#f4a261", "Hybrid": "#2a9d8f",
+                                             "Electric": "#e63946"},
+                         title="Engine capacity vs price", labels={"Price": "Price (lakhs, log scale)"})
+        st.plotly_chart(fig, width="stretch")
+        corr = data["Engine (cc)"].corr(np.log1p(data["Price"]))
+        st.caption(f"Overall the link looks weak (correlation with log price: {corr:.2f}) because most big-engine cars "
+                   "are old diesels (median year 1996). Comparing cars of the same year, bigger engines do cost more "
+                   "(partial correlation about 0.53). Hybrids sit highest: they are newer (median 2015).")
+    with r:
+        towns = data["Town"].value_counts().head(12).index
+        tdf = data[data["Town"].isin(towns)]
+        order = tdf.groupby("Town")["Price"].median().sort_values(ascending=False).index.tolist()
+        fig = px.box(tdf, x="Town", y="Price", log_y=True, points=False, category_orders={"Town": order},
+                     title="Price by town (12 towns with the most ads)", labels={"Price": "Price (lakhs, log scale)"})
+        fig.update_xaxes(tickangle=-40)
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Dehiwala-Mount Lavinia, Colombo and Negombo have the highest median prices; Kurunegala and Gampaha "
+                   "the lowest. The ranges overlap a lot, so location matters much less than brand, year and engine size.")
+
     with st.expander("Browse the cleaned data"):
         st.dataframe(data, width="stretch", height=300)
 
