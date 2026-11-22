@@ -19,8 +19,9 @@ MODEL_FILES = {
     "LightGBM": "lightgbm.pkl",
     "CatBoost": "catboost.pkl",
     "AdaBoost": "adaboost.pkl",
+    "Stacking": "stacking.pkl",
 }
-FAMILY_COLORS = {"Bagging": "#2a9d8f", "Boosting": "#e76f51", "Hybrid": "#7b2cbf",
+FAMILY_COLORS = {"Bagging": "#2a9d8f", "Boosting": "#e76f51", "Stacking": "#e9a400", "Hybrid": "#7b2cbf",
                  "Neural network": "#8d99ae", "Single model": "#adb5bd"}
 
 
@@ -52,7 +53,7 @@ def predict(models, name, X):
 results, fi, preds, data, meta = load_tables()
 
 st.title("🚗 Ensemble Learning Dashboard")
-st.caption("Predicting Sri Lankan used car prices (ikman.lk & riyasewana.lk data) with bagging, boosting and a hybrid RF + ANN model. Prices are in lakhs (1 lakh = Rs 100,000).")
+st.caption("Predicting Sri Lankan used car prices (ikman.lk & riyasewana.lk data) with bagging, boosting, stacking and a hybrid RF + ANN model. Prices are in lakhs (1 lakh = Rs 100,000).")
 
 best_mae = results.loc[results["MAE (lakhs)"].idxmin()]
 best_r2 = results.loc[results["R2"].idxmax()]
@@ -61,10 +62,10 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Cars in dataset", f"{len(data):,}")
 c2.metric("Lowest error", best_mae["Model"], f"{best_mae['MAE (lakhs)']:.2f} lakhs MAE", delta_color="off")
 c3.metric("Best R²", best_r2["Model"], f"{best_r2['R2']:.3f}", delta_color="off")
-c4.metric("Fastest to train", fastest["Model"], f"{fastest['Train time (s)']:.1f} s", delta_color="off")
+c4.metric("Fastest ensemble to train", fastest["Model"], f"{fastest['Train time (s)']:.1f} s", delta_color="off")
 
 tabs = st.tabs(["📊 Dataset", "🏆 Model comparison", "⚔️ RF vs XGBoost", "🔍 Feature importance",
-                "🧮 Price predictor", "🧬 Hybrid RF + ANN", "📚 Research"])
+                "🧮 Price predictor", "🧬 Stacking & hybrid", "📚 Research"])
 
 # ---------------- Dataset ----------------
 with tabs[0]:
@@ -141,16 +142,42 @@ with tabs[1]:
     if metric == "R2":
         fig.update_xaxes(range=[0.7, 1])
     st.plotly_chart(fig, width="stretch")
-    st.dataframe(res.style.format({"R2": "{:.3f}", "MAE (lakhs)": "{:.2f}", "RMSE (lakhs)": "{:.2f}",
-                                   "MAPE (%)": "{:.1f}", "Train time (s)": "{:.1f}"})
+    disp = res.copy()
+    disp["Train time (s)"] = disp["Train time (s)"].map(lambda v: "n/a" if pd.isna(v) else f"{v:.1f}")
+    st.dataframe(disp.style.format({"R2": "{:.3f}", "MAE (lakhs)": "{:.2f}", "RMSE (lakhs)": "{:.2f}",
+                                    "MAPE (%)": "{:.1f}"})
                  .highlight_min(subset=["MAE (lakhs)", "RMSE (lakhs)", "MAPE (%)"], color="#b7e4c7")
                  .highlight_max(subset=["R2"], color="#b7e4c7"),
                  width="stretch", hide_index=True)
 
     fam = results[results["Family"].isin(["Bagging", "Boosting"])].groupby("Family")[["MAE (lakhs)", "R2"]].mean()
     st.markdown(f"**Bagging vs Boosting (average):** bagging MAE {fam.loc['Bagging', 'MAE (lakhs)']:.2f} vs "
-                f"boosting MAE {fam.loc['Boosting', 'MAE (lakhs)']:.2f} lakhs. Every ensemble beats the single "
-                f"decision tree baseline, which is the core idea of ensemble learning.")
+                f"boosting MAE {fam.loc['Boosting', 'MAE (lakhs)']:.2f} lakhs. Bagging, gradient boosting and stacking all beat the single "
+                f"decision tree; AdaBoost is the exception, because re-weighting makes it chase noisy, extreme ads.")
+    st.caption("ANN training time was not recorded separately (it is included in the hybrid's time). "
+               "Stacking was trained on a different machine than the other models, so its time is approximate.")
+
+    st.markdown("#### Where do the errors come from? Average error by price band")
+    band_models = ["Decision Tree (baseline)", "Random Forest", "XGBoost", "LightGBM", "CatBoost", "Stacking"]
+    bands = preds.assign(Band=pd.cut(preds["actual"], [0, 25, 50, 100, 1000],
+                                     labels=["< 25 lakhs", "25-50", "50-100", "> 100 lakhs"]))
+    bmae = pd.DataFrame({m: (bands[m] - bands["actual"]).abs() for m in band_models})
+    bmae["Band"] = bands["Band"]
+    bmae = bmae.groupby("Band", observed=True).mean().reset_index().melt(id_vars="Band", var_name="Model", value_name="MAE")
+    st.plotly_chart(px.bar(bmae, x="Band", y="MAE", color="Model", barmode="group", text_auto=".1f",
+                           color_discrete_map={"Decision Tree (baseline)": "#adb5bd", "Random Forest": "#2a9d8f",
+                                               "XGBoost": "#e76f51", "LightGBM": "#f4a582", "CatBoost": "#b23a48",
+                                               "Stacking": "#e9a400"},
+                           labels={"MAE": "Average error (lakhs)"}), width="stretch")
+    worst = {m: (preds[m] - preds["actual"]).abs().max() for m in ["Random Forest", "CatBoost", "Stacking"]}
+    st.info(f"Errors are 3 to 5 lakhs for cars under 100 lakhs, but about 20 lakhs above that, because luxury cars are rare "
+            f"in the data. **Among single models, Random Forest has the lowest (or tied lowest) error in every band, even for "
+            f"expensive cars** (19.8 vs 21.4 lakhs for CatBoost). "
+            f"CatBoost's higher R² comes from a handful of extreme cars: its single worst miss is "
+            f"{worst['CatBoost']:.0f} lakhs vs {worst['Random Forest']:.0f} for RF, and R² squares errors, so those few cars "
+            f"dominate it. Stacking blends both: it is lowest of all in the cheapest and most expensive bands.")
+    st.caption("All results come from one 80/20 split. Gaps of a few tenths of a lakh in MAE or 0.01 in R² are small "
+               "and could change order on a different split; cross-validation would be needed to call them significant.")
 
 # ---------------- RF vs XGBoost ----------------
 with tabs[2]:
@@ -257,7 +284,40 @@ with tabs[4]:
 
 # ---------------- Hybrid ----------------
 with tabs[5]:
-    st.subheader("Hybrid model: Random Forest + ANN (stacking)")
+    st.subheader("Stacking: combining RF, XGBoost, LightGBM and CatBoost")
+    sw = json.load(open(ART / "stacking_weights.json"))
+    l, r = st.columns([3, 2])
+    with l:
+        st.markdown("""
+**How it works**
+1. Four **base models** (Random Forest, XGBoost, LightGBM, CatBoost) each predict the price.
+   Their training-set predictions come from **5-fold cross-validation** (out-of-fold), so the next step
+   never sees predictions on cars a model was trained on.
+2. A **meta-model** (Ridge regression) learns the best weighted combination of the four predictions.
+3. Bagging (RF) is strong on typical cars and boosting limits extreme misses, so blending them uses both strengths.
+""")
+    with r:
+        st.graphviz_chart("""
+digraph { rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#f1f3f5", fontname="Helvetica"];
+ F [label="Car features"]; P [label="Price", fillcolor="#ffe8cc"];
+ M [label="Ridge\n(meta-model)", fillcolor="#fff3bf"];
+ RF [label="Random Forest", fillcolor="#c9f0e9"]; X [label="XGBoost", fillcolor="#fde2d8"];
+ L [label="LightGBM", fillcolor="#fde2d8"]; C [label="CatBoost", fillcolor="#fde2d8"];
+ F -> RF; F -> X; F -> L; F -> C; RF -> M; X -> M; L -> M; C -> M; M -> P }""")
+    l, r = st.columns(2)
+    with l:
+        wdf = pd.DataFrame({"Base model": list(sw), "Weight": list(sw.values())})
+        st.plotly_chart(px.bar(wdf, x="Weight", y="Base model", orientation="h", text_auto=".2f",
+                               title="How much the meta-model trusts each base model"), width="stretch")
+    with r:
+        sm = results[results["Model"].isin(["Random Forest", "CatBoost", "Stacking"])].set_index("Model")
+        st.dataframe(sm[["MAE (lakhs)", "R2", "RMSE (lakhs)"]].style.format("{:.3f}"), width="stretch")
+        st.success(f"Stacking matches CatBoost's R² ({sm.loc['Stacking', 'R2']:.3f}) while keeping an error close to "
+                   f"Random Forest ({sm.loc['Stacking', 'MAE (lakhs)']:.2f} vs {sm.loc['Random Forest', 'MAE (lakhs)']:.2f} lakhs). "
+                   "The meta-model gives Random Forest the largest weight.")
+
+    st.divider()
+    st.subheader("Hybrid model: Random Forest + ANN (a stacking variant)")
     l, r = st.columns([3, 2])
     with l:
         st.markdown("""
@@ -320,9 +380,12 @@ with tabs[6]:
 """)
     st.markdown("#### Key findings from this project")
     rf, cb = results.set_index("Model").loc["Random Forest"], results.set_index("Model").loc["CatBoost"]
+    st_ = results.set_index("Model").loc["Stacking"]
     st.markdown(f"""
-- **Random Forest** had the lowest average error ({rf['MAE (lakhs)']:.2f} lakhs), while **CatBoost** had the best R²
-  ({cb['R2']:.3f}), so boosting handled the expensive cars slightly better and RF the typical ones.
-- Every ensemble clearly beat the **single decision tree**, confirming that combining models reduces error.
+- **Random Forest** had the lowest average error ({rf['MAE (lakhs)']:.2f} lakhs), while **CatBoost** had the best R² among
+  single models ({cb['R2']:.3f}). RF was better for typical cars; CatBoost's R² edge comes from smaller misses on a few extreme cars.
+- **Stacking** all four combined these strengths: R² {st_['R2']:.3f} with an error of {st_['MAE (lakhs)']:.2f} lakhs.
+- Bagging, gradient boosting and stacking all beat the **single decision tree**, confirming that combining models reduces error.
+  AdaBoost was the exception: its re-weighting over-focuses on noisy, extreme ads.
 - The **hybrid RF + ANN** greatly improved the ANN but did not beat RF, showing tree ensembles are already strong on tabular data.
 """)
