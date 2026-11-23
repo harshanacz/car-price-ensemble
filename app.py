@@ -46,8 +46,7 @@ st.title("🚗 Sri Lankan Used Car Price Prediction")
 st.caption("Bagging vs boosting vs stacking vs hybrid · Data: ikman.lk & riyasewana.lk (Kaggle) · "
            "Prices in lakhs (1 lakh = Rs 100,000)")
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Cars", f"{len(data):,}")
+c2, c3, c4 = st.columns(3)
 c2.metric("Lowest error", "Random Forest", f"{R.loc['Random Forest', 'MAE (lakhs)']:.2f} lakhs", delta_color="off")
 c3.metric("Best R²", "Stacking", f"{R.loc['Stacking', 'R2']:.3f}", delta_color="off")
 c4.metric("Fastest ensemble", "XGBoost", f"{R.loc['XGBoost', 'Train time (s)']:.1f} s", delta_color="off")
@@ -56,37 +55,39 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Data", "🏆 Models", "🧬 Stacking & h
 
 # ---------------- Data ----------------
 with tab1:
-    l, r = st.columns(2)
-    with l:
-        st.plotly_chart(px.histogram(data, x="Price", nbins=60, title="Price distribution",
-                                     labels={"Price": "Price (lakhs)"}), width="stretch")
-        takeaway("Prices are right-skewed (a few very expensive cars), so models were trained on log price.")
-    with r:
-        top = data.groupby("Brand")["Price"].agg(["median", "count"]).query("count >= 20") \
-            .sort_values("median", ascending=False).head(10).reset_index()
-        fig = px.bar(top, x="median", y="Brand", orientation="h", title="Median price by brand (top 10)",
-                     labels={"median": "Median price (lakhs)"})
-        fig.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig, width="stretch")
-        takeaway("European brands cost 2 to 3 times more than Toyota or Honda.")
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Car ads", f"{len(data):,}")
+    d2.metric("Brands", data["Brand"].nunique())
+    d3.metric("Models", f"{data['Model'].nunique():,}")
+    d4.metric("Median price", f"{data['Price'].median():.0f} lakhs")
+
+    def med_bar(col, title, top=None, horizontal=False):
+        g = data.groupby(col)["Price"].agg(["median", "count"])
+        if top:
+            g = g.query("count >= 20").sort_values("count", ascending=False).head(top)
+        g = g.sort_values("median", ascending=horizontal).reset_index()
+        fig = px.bar(g, x="median" if horizontal else col, y=col if horizontal else "median",
+                     orientation="h" if horizontal else "v", text_auto=".0f", title=title,
+                     labels={"median": "Median price (lakhs)", col: ""}, color_discrete_sequence=["#2a9d8f"])
+        fig.update_traces(textangle=0, textposition="outside", cliponaxis=False)
+        return fig.update_layout(height=380)
 
     l, r = st.columns(2)
-    with l:
-        yr = data.groupby("YOM")["Price"].median().reset_index()
-        st.plotly_chart(px.line(yr, x="YOM", y="Price", title="Median price by year",
-                                labels={"Price": "Median price (lakhs)", "YOM": "Year"}), width="stretch")
-        takeaway("Newer cars cost much more, especially 2015 and later.")
-    with r:
-        st.plotly_chart(px.scatter(data, x="Engine (cc)", y="Price", color="Fuel Type", opacity=0.5, log_y=True,
-                                   title="Engine size vs price",
-                                   color_discrete_map={"Petrol": "#4361ee", "Diesel": "#f4a261",
-                                                       "Hybrid": "#2a9d8f", "Electric": "#e63946"},
-                                   labels={"Price": "Price (lakhs, log)"}), width="stretch")
-        takeaway("Engine size looks unrelated at first, because big engines are mostly old diesels. "
-                 "Among cars of the same year, bigger engines do cost more.")
+    l.plotly_chart(med_bar("Brand", "Median price by brand (10 most advertised)", top=10, horizontal=True), width="stretch")
+    age = data.assign(Age=2025 - data["YOM"]).query("Age <= 40").groupby("Age")["Price"].median().reset_index()
+    r.plotly_chart(px.line(age, x="Age", y="Price", markers=True, title="Median price by car age",
+                           labels={"Age": "Age (years)", "Price": "Median price (lakhs)"},
+                           color_discrete_sequence=["#2a9d8f"]).update_layout(height=380), width="stretch")
 
-    st.info("**Data cleaning:** Mileage was dropped because it was calculated from the year "
-            "(correlation -1.0), not real readings. Date and 252 duplicate ads were also removed.")
+    l, r = st.columns(2)
+    l.plotly_chart(med_bar("Fuel Type", "Median price by fuel type"), width="stretch")
+    r.plotly_chart(med_bar("Gear", "Median price by gear"), width="stretch")
+
+    st.info("""**Key findings**
+- **Brand and age matter most.** Mercedes-Benz costs about twice as much as Toyota (BMW and Audi even more), and prices drop steadily as cars get older.
+- **Hybrids and automatics cost more**, partly because they are newer cars.
+- **Mileage was dropped:** it was calculated from the year (correlation -1.0), not real readings. 252 duplicate ads were also removed.
+- **Prices are skewed** (a few very expensive cars), so the models were trained on log price.""")
 
 # ---------------- Models ----------------
 with tab2:
