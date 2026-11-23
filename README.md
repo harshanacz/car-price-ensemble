@@ -17,6 +17,7 @@ Predicts used car prices in Sri Lanka and compares bagging, boosting, stacking a
 
 ## Key findings
 - All ensembles beat the single decision tree.
+- 5-fold cross-validation confirmed the ranking: RF 5.23 ± 0.16, Stacking 5.27 ± 0.15, XGBoost 5.66 ± 0.21 lakhs MAE.
 - Random Forest had the lowest average error; stacking had the best R².
 - XGBoost trained about 8x faster than Random Forest.
 - The hybrid RF + ANN improved the neural network by 26% but did not beat Random Forest.

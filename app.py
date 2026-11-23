@@ -45,7 +45,7 @@ def load_tables():
     return (pd.read_csv(ART / "results.csv"), pd.read_csv(ART / "feature_importance.csv", index_col=0),
             pd.read_csv(ART / "test_predictions.csv"), pd.read_csv(ART / "clean_data.csv"),
             json.load(open(ART / "meta.json")), json.load(open(ART / "stacking_weights.json")),
-            pd.read_csv(ART / "research_results.csv"))
+            pd.read_csv(ART / "research_results.csv"), pd.read_csv(ART / "cv_results.csv"))
 
 
 @st.cache_resource
@@ -80,7 +80,7 @@ def box(kind, html):
     st.markdown(f'<div class="{kind}">{html}</div>', unsafe_allow_html=True)
 
 
-results, fi, preds, data, meta, weights, research = load_tables()
+results, fi, preds, data, meta, weights, research, cv = load_tables()
 R = results.set_index("Model")
 RAW_ROWS, DUPES = 9788, 252
 N_TEST = len(preds)
@@ -89,8 +89,8 @@ N_TRAIN = len(data) - N_TEST
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.markdown("## 🚗 Navigation")
-    page = st.radio("Select page", ["1. Overview", "2. Model Comparison", "3. Stacking & Hybrid",
-                                    "4. Research Comparison", "5. Price Prediction", "6. About the Project"],
+    page = st.radio("Select page", ["1. Overview", "2. Model Comparison", "3. Research Comparison",
+                                    "4. Price Prediction", "5. About the Project"],
                     label_visibility="collapsed")
     st.divider()
     st.markdown(f"""
@@ -100,7 +100,7 @@ with st.sidebar:
 
 **Coverage:** Dec 2024 – Feb 2025
 
-**Split:** Random 80/20 ({N_TRAIN:,} train / {N_TEST:,} test)
+**Split:** Random 80/20 ({N_TRAIN:,} train / {N_TEST:,} test), plus 5-fold cross-validation
 
 **Target:** Price in lakhs (1 lakh = Rs 100,000)
 """)
@@ -199,7 +199,76 @@ elif page.startswith("2"):
         col.plotly_chart(fig, width="stretch")
 
     st.subheader("Detailed analysis")
-    t1, t2, t3, t4 = st.tabs(["Actual vs predicted", "Error by price range", "Feature importance", "Full results table"])
+    t0, t1, t2, t3, t5, t4 = st.tabs(["Stacking & hybrid", "Actual vs predicted", "Error by price range",
+                                      "Feature importance", "Stability check (5-fold CV)", "Full results table"])
+    with t5:
+        cvd = cv.copy()
+        cvd["Model"] = cvd["Model"].map(LABEL)
+        cvd["MAE (lakhs)"] = cvd.apply(lambda r: f"{r['MAE mean']:.2f} ± {r['MAE std']:.2f}", axis=1)
+        cvd["R²"] = cvd.apply(lambda r: f"{r['R2 mean']:.3f} ± {r['R2 std']:.3f}", axis=1)
+        st.dataframe(cvd[["Model", "MAE (lakhs)", "R²", "MAE folds"]].rename(columns={"MAE folds": "MAE in each fold"}),
+                     width="stretch", hide_index=True)
+        fig = go.Figure()
+        for _, rw in cv.iterrows():
+            fig.add_trace(go.Bar(x=[LABEL[rw["Model"]]], y=[rw["MAE mean"]], error_y=dict(type="data", array=[rw["MAE std"]]),
+                                 marker_color=COLORS[rw["Model"]], text=f"{rw['MAE mean']:.2f}", textposition="outside",
+                                 showlegend=False))
+        st.plotly_chart(fig.update_layout(height=380, yaxis_title="MAE (lakhs), mean ± std over 5 folds"), width="stretch")
+        C = cv.set_index("Model")
+        box("interp", f"<b>Interpretation:</b> the whole dataset was split into 5 parts, and each model was trained 5 times, "
+                      f"each time tested on a different part. The ranking stays the same as the single split: "
+                      f"<b>Random Forest</b> has the lowest error ({C.loc['Random Forest', 'MAE mean']:.2f} ± {C.loc['Random Forest', 'MAE std']:.2f}) "
+                      f"and <b>Stacking</b> the best R² ({C.loc['Stacking', 'R2 mean']:.3f}). RF and stacking are within each other's "
+                      f"spread, so they are effectively tied, but RF beats XGBoost "
+                      f"({C.loc['XGBoost', 'MAE mean']:.2f}) and every ensemble clearly beats the single tree "
+                      f"({C.loc['Decision Tree (baseline)', 'MAE mean']:.2f}). R² varies more between folds because it depends on "
+                      f"which expensive cars land in each test part.")
+    with t0:
+        l, r = st.columns(2)
+        with l:
+            st.subheader("Stacking: RF + XGBoost → Ridge")
+            st.graphviz_chart("""
+    digraph { rankdir=LR; node [shape=box, style="rounded,filled", fontname="Helvetica"];
+     F [label="Car features", fillcolor="#f1f3f5"];
+     RF [label="Random Forest", fillcolor="#c9f0e9"]; X [label="XGBoost", fillcolor="#fde2d8"];
+     M [label="Ridge\\n(meta-model)", fillcolor="#fff3bf"]; P [label="Price", fillcolor="#ffe8cc"];
+     F -> RF; F -> X; RF -> M; X -> M; M -> P }""")
+            st.markdown("""
+    1. Random Forest and XGBoost each predict the price.
+    2. Their training predictions come from **5-fold cross-validation** (out-of-fold), so the meta-model never sees predictions on cars a model was trained on.
+    3. A **Ridge regression** learns the best weighted combination.
+    """)
+            wdf = pd.DataFrame({"Model": list(weights), "Weight": list(weights.values())})
+            st.plotly_chart(px.bar(wdf, x="Model", y="Weight", color="Model", color_discrete_map=COLORS, text_auto=".2f",
+                                   title="Weight given to each base model").update_layout(showlegend=False, height=300),
+                            width="stretch")
+            box("interp", f"<b>Interpretation:</b> Ridge gives the two models almost equal weight "
+                          f"({weights['Random Forest']:.2f} RF, {weights['XGBoost']:.2f} XGBoost). The blend has the best "
+                          f"R² ({R.loc['Stacking', 'R2']:.3f}) and RMSE, with error close to RF "
+                          f"({R.loc['Stacking', 'MAE (lakhs)']:.2f} vs {R.loc['Random Forest', 'MAE (lakhs)']:.2f} lakhs).")
+        with r:
+            st.subheader("Hybrid: Random Forest + Neural Network")
+            st.graphviz_chart("""
+    digraph { rankdir=LR; node [shape=box, style="rounded,filled", fontname="Helvetica"];
+     F [label="Car features", fillcolor="#f1f3f5"]; RF [label="Random Forest", fillcolor="#c9f0e9"];
+     A [label="Neural network\\n(64 → 32)", fillcolor="#e2d4f5"]; P [label="Price", fillcolor="#ffe8cc"];
+     F -> RF -> A; F -> A; A -> P }""")
+            st.markdown("""
+    1. Random Forest predicts the price (again using out-of-fold predictions for training).
+    2. The **neural network** gets the normal car features **plus** the RF prediction as an extra input.
+    3. RF captures sharp rules; the network learns smooth corrections on top.
+    """)
+            hy = results.set_index("Model").loc[["ANN (alone)", "Hybrid RF + ANN", "Random Forest"]].reset_index()
+            st.plotly_chart(px.bar(hy, x="Model", y="MAE (lakhs)", color="Model", color_discrete_map=COLORS,
+                                   text_auto=".2f", title="Average error (lakhs)").update_layout(showlegend=False, height=300),
+                            width="stretch")
+            gain = (1 - R.loc["Hybrid RF + ANN", "MAE (lakhs)"] / R.loc["ANN (alone)", "MAE (lakhs)"]) * 100
+            box("interp", f"<b>Interpretation:</b> The hybrid cuts the neural network's error by <b>{gain:.0f}%</b> "
+                          f"({R.loc['ANN (alone)', 'MAE (lakhs)']:.2f} → {R.loc['Hybrid RF + ANN', 'MAE (lakhs)']:.2f}), "
+                          f"but it does not beat plain Random Forest. RF already captures almost all the signal in this "
+                          f"tabular data.")
+        box("notice", "<b>RF + ARIMA</b> (the time-series hybrid) was not possible: the data is a snapshot of ads from "
+                      "Dec 2024 to Feb 2025, not a time series.")
     with t1:
         pick = st.selectbox("Model", order, format_func=lambda m: LABEL[m])
         mx = preds["actual"].max()
@@ -264,60 +333,11 @@ elif page.startswith("2"):
 **4. Why was the neural network weakest?**
 - Neural networks learn smooth patterns and need more data and tuning. Car prices follow sharp rules (brand, year thresholds) that trees capture naturally.
 """)
-    box("notice", "<b>Note:</b> all results come from one 80/20 split. Very small gaps (like RF 5.39 vs stacking 5.44) "
-                  "could change on a different split. The large gaps (ensembles vs single tree, trees vs neural network) "
-                  "are reliable.")
-
-# ---------------- 3. Stacking & Hybrid ----------------
-elif page.startswith("3"):
-    l, r = st.columns(2)
-    with l:
-        st.subheader("Stacking: RF + XGBoost → Ridge")
-        st.graphviz_chart("""
-digraph { rankdir=LR; node [shape=box, style="rounded,filled", fontname="Helvetica"];
- F [label="Car features", fillcolor="#f1f3f5"];
- RF [label="Random Forest", fillcolor="#c9f0e9"]; X [label="XGBoost", fillcolor="#fde2d8"];
- M [label="Ridge\\n(meta-model)", fillcolor="#fff3bf"]; P [label="Price", fillcolor="#ffe8cc"];
- F -> RF; F -> X; RF -> M; X -> M; M -> P }""")
-        st.markdown("""
-1. Random Forest and XGBoost each predict the price.
-2. Their training predictions come from **5-fold cross-validation** (out-of-fold), so the meta-model never sees predictions on cars a model was trained on.
-3. A **Ridge regression** learns the best weighted combination.
-""")
-        wdf = pd.DataFrame({"Model": list(weights), "Weight": list(weights.values())})
-        st.plotly_chart(px.bar(wdf, x="Model", y="Weight", color="Model", color_discrete_map=COLORS, text_auto=".2f",
-                               title="Weight given to each base model").update_layout(showlegend=False, height=300),
-                        width="stretch")
-        box("interp", f"<b>Interpretation:</b> Ridge gives the two models almost equal weight "
-                      f"({weights['Random Forest']:.2f} RF, {weights['XGBoost']:.2f} XGBoost). The blend has the best "
-                      f"R² ({R.loc['Stacking', 'R2']:.3f}) and RMSE, with error close to RF "
-                      f"({R.loc['Stacking', 'MAE (lakhs)']:.2f} vs {R.loc['Random Forest', 'MAE (lakhs)']:.2f} lakhs).")
-    with r:
-        st.subheader("Hybrid: Random Forest + Neural Network")
-        st.graphviz_chart("""
-digraph { rankdir=LR; node [shape=box, style="rounded,filled", fontname="Helvetica"];
- F [label="Car features", fillcolor="#f1f3f5"]; RF [label="Random Forest", fillcolor="#c9f0e9"];
- A [label="Neural network\\n(64 → 32)", fillcolor="#e2d4f5"]; P [label="Price", fillcolor="#ffe8cc"];
- F -> RF -> A; F -> A; A -> P }""")
-        st.markdown("""
-1. Random Forest predicts the price (again using out-of-fold predictions for training).
-2. The **neural network** gets the normal car features **plus** the RF prediction as an extra input.
-3. RF captures sharp rules; the network learns smooth corrections on top.
-""")
-        hy = results.set_index("Model").loc[["ANN (alone)", "Hybrid RF + ANN", "Random Forest"]].reset_index()
-        st.plotly_chart(px.bar(hy, x="Model", y="MAE (lakhs)", color="Model", color_discrete_map=COLORS,
-                               text_auto=".2f", title="Average error (lakhs)").update_layout(showlegend=False, height=300),
-                        width="stretch")
-        gain = (1 - R.loc["Hybrid RF + ANN", "MAE (lakhs)"] / R.loc["ANN (alone)", "MAE (lakhs)"]) * 100
-        box("interp", f"<b>Interpretation:</b> The hybrid cuts the neural network's error by <b>{gain:.0f}%</b> "
-                      f"({R.loc['ANN (alone)', 'MAE (lakhs)']:.2f} → {R.loc['Hybrid RF + ANN', 'MAE (lakhs)']:.2f}), "
-                      f"but it does not beat plain Random Forest. RF already captures almost all the signal in this "
-                      f"tabular data.")
-    box("notice", "<b>RF + ARIMA</b> (the time-series hybrid) was not possible: the data is a snapshot of ads from "
-                  "Dec 2024 to Feb 2025, not a time series.")
+    box("notice", "<b>Reliability:</b> the 5-fold cross-validation (see the Stability check tab) gives the same ranking "
+                  "as the single 80/20 split, so the main conclusions hold. RF and stacking are effectively tied on MAE.")
 
 # ---------------- 4. Research ----------------
-elif page.startswith("4"):
+elif page.startswith("3"):
     st.subheader("Random Forest vs gradient boosting (XGBoost, LightGBM, CatBoost)")
     RR = research.set_index("Model")
     cards([(m + (" 🏆 Best MAE" if m == "Random Forest" else " 🏆 Best R²" if m == "CatBoost" else ""),
@@ -366,7 +386,7 @@ elif page.startswith("4"):
 • Trees can still be used on features extracted by those networks.""")
 
 # ---------------- 5. Prediction ----------------
-elif page.startswith("5"):
+elif page.startswith("4"):
     st.subheader("Interactive used car price predictor")
     box("notice", "<b>Experimental estimate:</b> these predictions come from models trained on advertised prices "
                   "from Dec 2024 to Feb 2025. They are for educational demonstration only, not an official valuation.")
@@ -453,14 +473,15 @@ else:
 2. **Target transform:** trained on log(1 + price) because prices are skewed; predictions converted back to lakhs.
 3. **Split:** random 80/20, {N_TRAIN:,} training and {N_TEST:,} test cars. All models use the same test set.
 4. **Pipelines:** encoding is fitted only on the training data inside scikit-learn Pipelines, so the test set never leaks into training.
-5. **Models:** Decision Tree (baseline), Random Forest (bagging), XGBoost (boosting), Stacking (RF + XGBoost → Ridge, 5-fold out-of-fold), Hybrid (RF + neural network), and a neural network alone for reference. LightGBM and CatBoost were also tested for the research comparison.
-6. **Metrics:** MAE (average error in lakhs), RMSE (punishes big errors more), R² (share of price variation explained), MAPE (error as a % of price).
+5. **Validation:** besides the 80/20 split, Decision Tree, Random Forest, XGBoost and Stacking were checked with 5-fold cross-validation on the full dataset.
+6. **Models:** Decision Tree (baseline), Random Forest (bagging), XGBoost (boosting), Stacking (RF + XGBoost → Ridge, 5-fold out-of-fold), Hybrid (RF + neural network), and a neural network alone for reference. LightGBM and CatBoost were also tested for the research comparison.
+7. **Metrics:** MAE (average error in lakhs), RMSE (punishes big errors more), R² (share of price variation explained), MAPE (error as a % of price).
 """)
 
     st.subheader("Limitations")
     st.markdown("""
 - Default-style hyperparameters; no tuning.
-- One train/test split; small differences between models may not be significant.
+- RF and stacking are within each other's cross-validation spread, so their small difference is not significant.
 - Advertised prices, not final sale prices.
 - No real mileage, accident history or trim level in the data.
 - Only 2 months of ads; the Sri Lankan car market changes quickly with import rules.
