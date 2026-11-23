@@ -147,24 +147,47 @@ with tab2:
         st.plotly_chart(fig, width="stretch")
         takeaway("Gear, model, year and brand matter most. Gear ranks high partly because manual cars are mostly old.")
 
-    with st.expander("📚 Research notes: RF vs gradient boosting, tabular vs image/text"):
+    st.divider()
+    st.subheader("📚 Research: Random Forest vs gradient boosting")
+    rr = pd.read_csv(ART / "research_results.csv")
+    l, r = st.columns([3, 2])
+    with l:
         st.markdown("""
 | | Random Forest | XGBoost | LightGBM | CatBoost |
 |---|---|---|---|---|
-| How it builds trees | In parallel, then averages | One after another | One after another, leaf-wise (fastest) | One after another, balanced trees |
+| How it builds trees | In parallel, then averages | One after another | One after another, leaf-wise | One after another, balanced trees |
 | Mainly reduces | Variance | Bias | Bias | Bias |
 | Tuning needed | Little | More | More | Medium |
+| Speed | Medium | Fast | Fastest | Slower |
 | Categorical data | Needs encoding | Needs encoding | Some native support | Best native support |
-
-**Tabular data (this project):** tree ensembles usually win. They handle mixed columns, need little preprocessing,
-and capture sharp rules like "made after 2015". Here, the neural network alone had the highest error.
-
-**Images and text:** trees treat each pixel or word as a separate column, so they can't see shapes or word order.
-CNNs (images) and transformers (text) work much better there.
-
-**Note:** all results come from one 80/20 split, so very small gaps (like RF 5.39 vs stacking 5.44) could change on a
-different split. The large gaps (ensembles vs single tree, trees vs neural network) are reliable.
 """)
+    with r:
+        st.markdown("**Tested on the same test set**")
+        st.dataframe(rr.drop(columns="Family").style.format(
+            {"R2": "{:.3f}", "MAE (lakhs)": "{:.2f}", "RMSE (lakhs)": "{:.2f}", "MAPE (%)": "{:.1f}",
+             "Train time (s)": "{:.1f}"}), width="stretch", hide_index=True)
+    takeaway("RF had the lowest average error. The boosting models trained much faster, and CatBoost and LightGBM "
+             "had a higher R². With hyperparameter tuning, boosting models usually improve further.")
+
+    l, r = st.columns(2)
+    with l:
+        st.markdown("""
+**✅ Tabular data (like this project)**
+- Tree ensembles are usually the best choice.
+- They handle mixed columns (numbers, categories, yes/no) with little preprocessing.
+- They capture sharp rules, like "cars made after 2015 cost more".
+- Here, the neural network alone had the highest error of all models.
+""")
+    with r:
+        st.markdown("""
+**❌ Image and text data**
+- Trees treat each pixel or word as a separate column.
+- They can't see shapes in images or word order and meaning in text.
+- CNNs (images) and transformers (text) work much better.
+- Trees can still be used on features extracted by those networks.
+""")
+    st.caption("All results come from one 80/20 split, so very small gaps (like RF 5.39 vs stacking 5.44) could change "
+               "on a different split. The large gaps (ensembles vs single tree, trees vs neural network) are reliable.")
 
 # ---------------- Stacking & hybrid ----------------
 with tab3:

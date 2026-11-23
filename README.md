@@ -21,6 +21,7 @@ Predicts used car prices in Sri Lanka and compares bagging, boosting, stacking a
 - XGBoost trained about 8x faster than Random Forest.
 - The hybrid RF + ANN improved the neural network by 26% but did not beat Random Forest.
 - Mileage was dropped: it was calculated from the year, not real readings.
+- Research comparison: LightGBM (MAE 5.88, R² 0.908) and CatBoost (MAE 5.98, R² 0.912) were also tested on the same split. RF still had the lowest error; the boosting models trained faster.
 
 ## Files
 - `ensemble_car_price.ipynb`: training notebook (Google Colab)
