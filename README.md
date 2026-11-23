@@ -27,6 +27,9 @@ Predicts used car prices in Sri Lanka and compares bagging, boosting, stacking a
 - `app.py`: Streamlit dashboard
 - `artifacts/`: trained models and results
 
+## AI assistance
+Claude (Anthropic) helped generate the code and explanations. Dataset choice, training, deployment and review of results by Harshana A.M.K.
+
 ## Run locally
 ```bash
 pip install -r requirements.txt

@@ -246,3 +246,6 @@ with tab4:
         st.plotly_chart(px.bar(out, x="Price", y="Model", color="Model", color_discrete_map=COLORS, orientation="h",
                                text_auto=".1f", labels={"Price": "Predicted price (lakhs)"})
                         .update_layout(showlegend=False, height=280), width="stretch")
+
+st.divider()
+st.caption("AI assistance: Claude (Anthropic) helped generate the code and explanations. Dataset choice, training, deployment and review of results by Harshana A.M.K.")
