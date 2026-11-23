@@ -5,5 +5,3 @@ numpy
 joblib
 plotly
 xgboost
-lightgbm
-catboost
